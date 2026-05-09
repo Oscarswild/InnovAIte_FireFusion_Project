@@ -52,6 +52,11 @@ class Post(BaseModel):
     misinformation_risk_score: float
     severity: SeverityValue
 
+class Fact(BaseModel):
+    source: str
+    timestamp: datetime
+    content: str
+
 class NarrativeClusterObject(BaseModel):
     narrative_id: str
     narrative_summary: str
@@ -62,6 +67,8 @@ class NarrativeClusterObject(BaseModel):
     post_count: int
     combined_shares: int
     spread_status: SpreadVelocityIndicatorValue
+    key_claims: list[str]
+    matched_facts: list[Fact] = []
     timestamp_earliest: datetime
     timestamp_latest: datetime
     platforms: list[SocialMediaPlatformValue]

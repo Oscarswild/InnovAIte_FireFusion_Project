@@ -37,6 +37,20 @@ CREATE TABLE posts (
     ) STORED
 );
 
+CREATE TABLE narrative_cluster_key_claims (
+    id BIGSERIAL PRIMARY KEY,
+    narrative_cluster_id TEXT REFERENCES narrative_clusters(id),
+    content TEXT
+);
+
+CREATE TABLE narrative_cluster_matched_facts (
+    id BIGSERIAL PRIMARY KEY,
+    narrative_cluster_id TEXT REFERENCES narrative_clusters(id),
+    source TEXT,
+    timestamp TIMESTAMPTZ,
+    content TEXT
+);
+
 CREATE TABLE narrative_cluster_posts (
     cluster_id TEXT REFERENCES narrative_clusters(id) ON DELETE CASCADE,
     post_id TEXT REFERENCES posts(id) ON DELETE CASCADE,
@@ -60,28 +74,46 @@ SELECT
     min(p.ts) AS timestamp_earliest,
     max(p.ts) AS timestamp_latest,
     array_agg(DISTINCT p.platform) FILTER (WHERE p.platform IS NOT NULL) AS platforms,
-    nc.review_status AS review_status
+    nc.review_status AS review_status,
+    kc.key_claims AS key_claims,
+    mf.matched_facts AS matched_facts
 FROM narrative_clusters nc
 LEFT JOIN incidents i ON nc.incident_id = i.id
 LEFT JOIN narrative_cluster_posts ncp ON ncp.cluster_id = nc.id
 LEFT JOIN posts p ON p.id = ncp.post_id
-GROUP BY nc.id, nc.summary, nc.incident_id, i.name;
+LEFT JOIN (
+    SELECT narrative_cluster_id, array_agg(content ORDER BY id) AS key_claims
+    FROM narrative_cluster_key_claims
+    GROUP BY narrative_cluster_id
+) kc ON kc.narrative_cluster_id = nc.id
+LEFT JOIN (
+    SELECT narrative_cluster_id,
+           jsonb_agg(
+               jsonb_build_object(
+                   'source', source,
+                   'timestamp', timestamp,
+                   'content', content
+               ) ORDER BY timestamp DESC
+           ) AS matched_facts
+    FROM narrative_cluster_matched_facts
+    GROUP BY narrative_cluster_id
+) mf ON mf.narrative_cluster_id = nc.id
+GROUP BY nc.id, nc.summary, nc.incident_id, i.name, kc.key_claims, mf.matched_facts;
 
 CREATE VIEW active_incident_objects AS
 SELECT
     i.id AS incident_id,
     i.name AS incident_name,
-    count(nco.narrative_id) AS total_flags,
+    count(DISTINCT p.id) AS total_flags,
     jsonb_build_object(
-        'critical', count(*) FILTER (WHERE nco.severity = 'CRITICAL'),
-        'high', count(*) FILTER (WHERE nco.severity = 'HIGH'),
-        'medium', count(*) FILTER (WHERE nco.severity = 'MEDIUM')
-    ) AS severity_breakdown,
-    (array_agg(nco.narrative_summary
-               ORDER BY nco.severity DESC NULLS LAST,
-                        nco.combined_shares DESC NULLS LAST)
-    )[1] AS top_threat
-FROM incidents i 
-LEFT JOIN narrative_cluster_objects nco ON nco.incident_id = i.id
+        'critical', count(*) FILTER (WHERE p.severity = 'CRITICAL'),
+        'high', count(*) FILTER (WHERE p.severity = 'HIGH'),
+        'medium', count(*) FILTER (WHERE p.severity = 'MEDIUM')
+    ) AS severity_breakdown
+
+FROM incidents i
+LEFT JOIN narrative_clusters nc ON nc.incident_id = i.id
+LEFT JOIN narrative_cluster_posts ncp ON ncp.cluster_id = nc.id
+LEFT JOIN posts p ON p.id = ncp.post_id
 WHERE i.is_active = true
 GROUP BY i.id, i.name;
